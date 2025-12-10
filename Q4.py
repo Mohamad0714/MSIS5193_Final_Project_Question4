@@ -8,41 +8,53 @@ import streamlit as st
 from pypdf import PdfReader
 import docx
 from bs4 import BeautifulSoup
-from google import genai  # Google Gen AI SDK for Gemini API
+from openai import OpenAI  # OpenAI SDK for closed-source GPT models
 
 # ------------- Streamlit page config ------------- #
 
 st.set_page_config(
-    page_title="LLM Document App (Q4 - Gemini)",
+    page_title="LLM Document App (Q4 - OpenAI GPT-4o-mini)",
     page_icon="🤖",
     layout="wide",
 )
 
-# ------------- LLM loading (Google Gemini via API) ------------- #
+# ------------- LLM loading (OpenAI via API) ------------- #
 
 @st.cache_resource
 def load_llm():
     """
-    Load a closed-source LLM (Google Gemini) via the Gemini API.
-    Requires GEMINI_API_KEY in environment or Streamlit secrets.
+    Load a closed-source LLM (OpenAI GPT-4o-mini) via the OpenAI API.
+    Requires OPENAI_API_KEY in environment or Streamlit secrets.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "GEMINI_API_KEY is not set. Create an API key in Google AI Studio "
-            "and set it as an environment variable or in st.secrets."
+            "OPENAI_API_KEY is not set. Create an API key at "
+            "https://platform.openai.com and set it as an environment "
+            "variable or in Streamlit secrets."
         )
 
-    client = genai.Client(api_key=api_key)
-    model_name = "gemini-2.0-flash"
+    # Initialize OpenAI client with the API key
+    client = OpenAI(api_key=api_key)
+    model_name = "gpt-4o-mini"  # closed-source, inexpensive model
 
     def call_llm(prompt: str) -> str:
-        """Send a text prompt to Gemini and return the response text."""
-        response = client.models.generate_content(
+        """
+        Send a text prompt to OpenAI Chat Completions API and
+        return the assistant's response text.
+        """
+        # Using Chat Completions as recommended in OpenAI docs
+        completion = client.chat.completions.create(  # :contentReference[oaicite:2]{index=2}
             model=model_name,
-            contents=prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0.2,
         )
-        return getattr(response, "text", str(response))
+        return completion.choices[0].message.content
 
     return call_llm
 
@@ -73,6 +85,9 @@ def read_html(uploaded_file):
     return soup.get_text(separator="\n")
 
 def extract_text_from_file(uploaded_file):
+    """
+    Detect file type and return plain text.
+    """
     name = uploaded_file.name.lower()
     uploaded_file.seek(0)
 
@@ -91,14 +106,17 @@ def extract_text_from_file(uploaded_file):
 
 def clean_abbrev_answer(raw_answer: str) -> list[str]:
     """
-    Keep only lines of the form:
+    Take the raw LLM output and keep only lines of the form:
     ABBR: full term
+
+    Returns a list of cleaned "ABBR: full term" strings.
     """
     clean_lines = []
     for line in raw_answer.splitlines():
         line = line.strip()
         if not line:
             continue
+        # pattern: ABBR: full term
         m = re.match(r'^([A-Z][A-Z0-9]{1,10})\s*:\s*(.+)$', line)
         if m:
             abbr = m.group(1).strip()
@@ -109,11 +127,11 @@ def clean_abbrev_answer(raw_answer: str) -> list[str]:
 # ------------- Streamlit UI ------------- #
 
 def main():
-    st.title("Input to AI (Q4 - Gemini)")
+    st.title("Input to AI (Q4 - OpenAI GPT-4o-mini)")
 
     st.write(
         "Ask a question and optionally upload documents. "
-        "This version uses Google Gemini (closed-source LLM via API)."
+        "This version uses OpenAI GPT-4o-mini (closed-source LLM via API)."
     )
 
     question = st.text_area("Your question:", height=80)
@@ -139,7 +157,7 @@ def main():
         with st.spinner("Thinking..."):
             llm = load_llm()
 
-            # ------ SPECIAL ABBREVIATION MODE ------ #
+            # ---------- SPECIAL MODE: Abbreviation index per article ---------- #
             if uploaded_files and is_abbrev_task:
                 st.subheader("AI Response (Abbreviation Index):")
 
@@ -148,6 +166,7 @@ def main():
                     if not doc_text:
                         continue
 
+                    # Limit context length
                     max_chars = 6000
                     if len(doc_text) > max_chars:
                         doc_text = doc_text[:max_chars]
@@ -165,9 +184,9 @@ def main():
                         "- Only include abbreviations that actually appear in the document.\n"
                         "- Most abbreviations appear in the form 'full term (ABBR)'. Use that pattern.\n"
                         "- The left side must be just the abbreviation token (e.g., 'WDC', 'ERGM', 'CAS').\n"
-                        "- The right side must be the full term from the document.\n"
+                        "- The right side must be the full term from the document, written clearly.\n"
                         "- Do NOT invent or guess abbreviations not supported by the text.\n"
-                        "- Do NOT add explanations or extra sentences.\n"
+                        "- Do NOT add explanations, bullets, or extra sentences.\n"
                         "- Output ONLY the index, one abbreviation per line, in the format 'ABBR: full term'.\n"
                         "\n"
                         "[DOCUMENT]\n"
@@ -177,6 +196,7 @@ def main():
 
                     result = llm(prompt)
 
+                    # Try to strip any echoed prompt markers
                     if "[ANSWER]" in result:
                         answer = result.split("[ANSWER]", 1)[-1].strip()
                     elif "Answer:" in result:
@@ -190,6 +210,7 @@ def main():
                     if not abbrev_lines:
                         st.markdown("_No abbreviations found._")
                     else:
+                        # Format like bullet list: - **WDC**: weighted degree centrality
                         bullets = []
                         for line in abbrev_lines:
                             abbr, full = line.split(":", 1)
@@ -198,7 +219,8 @@ def main():
 
                 return  # done with abbreviation mode
 
-            # ------ Normal QA mode ------ #
+            # ---------- Normal QA mode (with or without docs) ---------- #
+
             document_text = ""
             if uploaded_files:
                 texts = []
@@ -208,10 +230,12 @@ def main():
                         texts.append(f"--- FILE: {uploaded.name} ---\n{txt}\n")
                 document_text = "\n\n".join(texts)
 
+            # Limit context length
             max_chars = 6000
             if len(document_text) > max_chars:
                 document_text = document_text[:max_chars]
 
+            # Build the prompt for non-abbreviation tasks
             if document_text:
                 prompt = (
                     "You are a helpful assistant.\n"
@@ -226,6 +250,7 @@ def main():
                     "[ANSWER]"
                 )
             else:
+                # No document, general QA
                 prompt = (
                     "You are a helpful assistant.\n"
                     "Answer the question clearly and stay on topic.\n\n"
