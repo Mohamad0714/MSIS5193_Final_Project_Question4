@@ -1,5 +1,5 @@
 streamlit
-openai
+groq
 pypdf
 python-docx
 beautifulsoup4
