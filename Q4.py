@@ -1,69 +1,70 @@
 import os
 import re  # for cleaning abbreviation output
 
-# Make Streamlit behave nicely on Windows
+# Make Streamlit behave nicely on Windows / Cloud
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 
 import streamlit as st
 from pypdf import PdfReader
 import docx
 from bs4 import BeautifulSoup
-from openai import OpenAI  # OpenAI SDK for closed-source GPT models
+import google.generativeai as genai  # Gemini (closed-source) API
 
 # ------------- Streamlit page config ------------- #
 
 st.set_page_config(
-    page_title="LLM Document App (Q4 - OpenAI GPT-4o-mini)",
+    page_title="LLM Document App (Q4 - Gemini 2.0 Flash)",
     page_icon="🤖",
     layout="wide",
 )
 
-# ------------- LLM loading (OpenAI via API) ------------- #
+# ------------- LLM loading (Gemini via API) ------------- #
 
 @st.cache_resource
 def load_llm():
     """
-    Load a closed-source LLM (OpenAI GPT-4o-mini) via the OpenAI API.
-    Uses OPENAI_API_KEY from environment or Streamlit secrets.
+    Load a closed-source LLM (Google Gemini 2.0 Flash) via the Gemini API.
+    Uses GEMINI_API_KEY (preferred) or GOOGLE_API_KEY from Streamlit secrets
+    or environment variables.
     """
 
-    # 1) Try Streamlit secrets first (Streamlit Cloud style)
+    # 1) Try Streamlit secrets first
     api_key = None
-    if "OPENAI_API_KEY" in st.secrets:
-        api_key = st.secrets["OPENAI_API_KEY"]
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    elif "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
     else:
-        # 2) Fallback: environment variable (local dev or Cloud env var)
-        api_key = os.getenv("OPENAI_API_KEY")
+        # 2) Fallback: environment variables (local dev)
+        api_key = (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+        )
 
     if not api_key:
         raise RuntimeError(
-            "OPENAI_API_KEY is not set.\n\n"
+            "GEMINI_API_KEY / GOOGLE_API_KEY is not set.\n\n"
             "Fix:\n"
-            "- Locally: export OPENAI_API_KEY='your_key_here'\n"
+            "- Locally: export GEMINI_API_KEY='your_key_here'\n"
+            "           (or GOOGLE_API_KEY)\n"
             "- Streamlit Cloud: Settings → Advanced settings → Secrets, "
-            "add OPENAI_API_KEY there."
+            "add GEMINI_API_KEY there."
         )
 
-    # Initialize OpenAI client with the API key
-    client = OpenAI(api_key=api_key)
-    model_name = "gpt-4o-mini"  # closed-source, inexpensive model
+    # Configure Gemini client
+    genai.configure(api_key=api_key)
+
+    # Closed-source model with free tier support (varies by region)
+    # See Gemini API pricing & rate limits docs. :contentReference[oaicite:1]{index=1}
+    model = genai.GenerativeModel("gemini-2.0-flash")
 
     def call_llm(prompt: str) -> str:
         """
-        Send a text prompt to OpenAI Chat Completions API and
-        return the assistant's response text.
+        Send a text prompt to Gemini and return the assistant's response text.
         """
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            temperature=0.2,
-        )
-        return completion.choices[0].message.content
+        response = model.generate_content(prompt)
+        # response.text is the main text output
+        return getattr(response, "text", "").strip()
 
     return call_llm
 
@@ -136,11 +137,11 @@ def clean_abbrev_answer(raw_answer: str) -> list[str]:
 # ------------- Streamlit UI ------------- #
 
 def main():
-    st.title("Input to AI (Q4 - OpenAI GPT-4o-mini)")
+    st.title("Input to AI (Q4 - Gemini 2.0 Flash)")
 
     st.write(
         "Ask a question and optionally upload documents. "
-        "This version uses OpenAI GPT-4o-mini (closed-source LLM via API)."
+        "This version uses Google's Gemini 2.0 Flash (closed-source LLM via API)."
     )
 
     question = st.text_area("Your question:", height=80)
@@ -205,7 +206,6 @@ def main():
 
                     result = llm(prompt)
 
-                    # Try to strip any echoed prompt markers
                     if "[ANSWER]" in result:
                         answer = result.split("[ANSWER]", 1)[-1].strip()
                     elif "Answer:" in result:
@@ -219,7 +219,6 @@ def main():
                     if not abbrev_lines:
                         st.markdown("_No abbreviations found._")
                     else:
-                        # Format like bullet list: - **WDC**: weighted degree centrality
                         bullets = []
                         for line in abbrev_lines:
                             abbr, full = line.split(":", 1)
@@ -239,12 +238,10 @@ def main():
                         texts.append(f"--- FILE: {uploaded.name} ---\n{txt}\n")
                 document_text = "\n\n".join(texts)
 
-            # Limit context length
             max_chars = 6000
             if len(document_text) > max_chars:
                 document_text = document_text[:max_chars]
 
-            # Build the prompt for non-abbreviation tasks
             if document_text:
                 prompt = (
                     "You are a helpful assistant.\n"
@@ -259,7 +256,6 @@ def main():
                     "[ANSWER]"
                 )
             else:
-                # No document, general QA
                 prompt = (
                     "You are a helpful assistant.\n"
                     "Answer the question clearly and stay on topic.\n\n"
