@@ -24,14 +24,24 @@ st.set_page_config(
 def load_llm():
     """
     Load a closed-source LLM (OpenAI GPT-4o-mini) via the OpenAI API.
-    Requires OPENAI_API_KEY in environment or Streamlit secrets.
+    Uses OPENAI_API_KEY from environment or Streamlit secrets.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
+
+    # 1) Try Streamlit secrets first (Streamlit Cloud style)
+    api_key = None
+    if "OPENAI_API_KEY" in st.secrets:
+        api_key = st.secrets["OPENAI_API_KEY"]
+    else:
+        # 2) Fallback: environment variable (local dev or Cloud env var)
+        api_key = os.getenv("OPENAI_API_KEY")
+
     if not api_key:
         raise RuntimeError(
-            "OPENAI_API_KEY is not set. Create an API key at "
-            "https://platform.openai.com and set it as an environment "
-            "variable or in Streamlit secrets."
+            "OPENAI_API_KEY is not set.\n\n"
+            "Fix:\n"
+            "- Locally: export OPENAI_API_KEY='your_key_here'\n"
+            "- Streamlit Cloud: Settings → Advanced settings → Secrets, "
+            "add OPENAI_API_KEY there."
         )
 
     # Initialize OpenAI client with the API key
@@ -43,8 +53,7 @@ def load_llm():
         Send a text prompt to OpenAI Chat Completions API and
         return the assistant's response text.
         """
-        # Using Chat Completions as recommended in OpenAI docs
-        completion = client.chat.completions.create(  # :contentReference[oaicite:2]{index=2}
+        completion = client.chat.completions.create(
             model=model_name,
             messages=[
                 {
